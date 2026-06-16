@@ -1,0 +1,51 @@
+# ===========================================================================
+# OPTIONAL extra provider — Fireworks AI, an OpenAI-COMPATIBLE provider.
+# Mirrors the standalone config's `accounts/fireworks/*` model entry: it reuses
+# the `openai` provider type but overrides the upstream host/port, and routes
+# model names beginning with `accounts/fireworks/` to it.
+#
+# Needs a Fireworks key:
+#   kubectl create secret generic fireworks-secret -n agentgateway-system \
+#     --from-literal=Authorization="$FIREWORKS_API_KEY"
+# ===========================================================================
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: fireworks
+  namespace: agentgateway-system
+spec:
+  ai:
+    provider:
+      # OpenAI-compatible API, but pointed at Fireworks' host instead of OpenAI's.
+      # host/port are siblings of the provider key (not nested under `openai`).
+      openai: {}
+      host: api.fireworks.ai
+      port: 443
+  policies:
+    auth:
+      secretRef:
+        name: fireworks-secret
+---
+# Additive route: model names like "accounts/fireworks/models/..." -> Fireworks.
+# (Attaches to the same Gateway as the main llm-routes HTTPRoute.)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: fireworks-route
+  namespace: agentgateway-system
+spec:
+  parentRefs:
+    - name: agentgateway-proxy
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1/chat/completions
+          headers:
+            - type: RegularExpression
+              name: x-model
+              value: "^accounts/fireworks/.*"
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: fireworks

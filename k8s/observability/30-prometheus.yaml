@@ -1,0 +1,150 @@
+---
+# Prometheus — scrapes the agentgateway proxy's /metrics endpoint.
+# The gateway runs in a DIFFERENT namespace (agentgateway-system), so we use
+# kubernetes_sd_configs (endpoints role) which discovers it cluster-wide and then
+# keeps only the agentgateway-proxy Service endpoints.
+#
+# RBAC below grants Prometheus read access to endpoints/services/pods for discovery.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-observability
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-observability
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: observability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: observability
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      # ---- agentgateway data-plane proxy ----
+      # The agentgateway proxy exposes Prometheus metrics on port 15020 (/metrics).
+      # The auto-generated proxy Service only publishes the Gateway's listener ports
+      # (e.g. :80), NOT :15020 — so we discover the proxy PODS directly (pod role) and
+      # scrape pod_ip:15020. We key off the pod name prefix the Deployment gives them
+      # (agentgateway-proxy-...), which avoids depending on chart-specific pod labels.
+      - job_name: agentgateway
+        metrics_path: /metrics
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - agentgateway-system
+        relabel_configs:
+          # Keep only the proxy pods (created by the "agentgateway-proxy" Gateway).
+          - source_labels: [__meta_kubernetes_pod_name]
+            regex: "agentgateway-proxy-.*"
+            action: keep
+          # Scrape the metrics port regardless of which container ports are declared.
+          - source_labels: [__meta_kubernetes_pod_ip]
+            target_label: __address__
+            replacement: "$1:15020"
+          # Tidy labels for nicer dashboards.
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: kube_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+      # Scrape Prometheus' own metrics (optional, handy for the demo).
+      - job_name: prometheus
+        static_configs:
+          - targets: ["localhost:9090"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: observability
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.4.1
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=2h"
+            - "--web.enable-lifecycle"
+          ports:
+            - name: web
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: web
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: observability
+  labels:
+    app: prometheus
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - name: web
+      port: 9090
+      targetPort: web

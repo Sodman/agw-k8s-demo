@@ -1,0 +1,69 @@
+# ---------------------------------------------------------------------------
+# Model-name routing — the Gateway-API equivalent of the standalone config's
+# `llm.models` list, where each entry matched a model name glob (gemini*, gpt-*,
+# accounts/fireworks/*, ...) and sent it to a provider.
+#
+# The Kubernetes Gateway API routes on HTTP attributes (path, headers), not on
+# JSON request bodies. So we do it in two steps:
+#
+#   1. A PreRouting transformation copies the `model` field out of the request
+#      body into an `x-model` request header — BEFORE route selection runs.
+#   2. The HTTPRoute matches that `x-model` header with a regex and forwards to
+#      the matching provider backend.
+# ---------------------------------------------------------------------------
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: extract-model
+  namespace: agentgateway-system
+spec:
+  # Attach to the Gateway so it runs for every request through the proxy.
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway-proxy
+  traffic:
+    # PreRouting = run before the HTTPRoute match, so x-model is available to match on.
+    phase: PreRouting
+    transformation:
+      request:
+        set:
+          - name: x-model
+            # CEL: pull the "model" field from the JSON body, default to "" if absent.
+            value: 'has(json(request.body).model) ? json(request.body).model : ""'
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: llm-routes
+  namespace: agentgateway-system
+spec:
+  parentRefs:
+    - name: agentgateway-proxy
+  rules:
+    # gpt-*  ->  OpenAI
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1/chat/completions
+          headers:
+            - type: RegularExpression
+              name: x-model
+              value: "^gpt-.*"
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: openai
+    # claude-*  ->  Anthropic
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1/chat/completions
+          headers:
+            - type: RegularExpression
+              name: x-model
+              value: "^claude-.*"
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: anthropic

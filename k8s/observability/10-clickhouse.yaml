@@ -1,0 +1,103 @@
+---
+# ClickHouse: minimal single-pod server for the demo.
+# - native protocol on 9000 (used by the otel collector exporter and Grafana datasource)
+# - HTTP protocol on 8123
+# The `otel` database is created at startup via an init SQL script mounted from the ConfigMap.
+# The otel clickhouseexporter auto-creates the otel_logs table inside this DB (create_schema: true),
+# so NO manual table schema is required for the demo.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-init
+  namespace: observability
+data:
+  # Files placed in /docker-entrypoint-initdb.d are executed on first boot.
+  init-db.sql: |
+    CREATE DATABASE IF NOT EXISTS otel;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickhouse
+  namespace: observability
+  labels:
+    app: clickhouse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      containers:
+        - name: clickhouse
+          # Pin a concrete recent LTS tag. Bump if you prefer the rolling "latest".
+          image: clickhouse/clickhouse-server:25.3
+          ports:
+            - name: native
+              containerPort: 9000
+            - name: http
+              containerPort: 8123
+          env:
+            # Default user with no password keeps the demo trivial.
+            # The exporter DSN and Grafana datasource both use user "default" / empty password.
+            - name: CLICKHOUSE_DB
+              value: otel
+            - name: CLICKHOUSE_USER
+              value: default
+            - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
+              value: "1"
+            # Allow the default user to connect without a password (demo only).
+            - name: CLICKHOUSE_PASSWORD
+              value: ""
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/clickhouse
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+      volumes:
+        - name: data
+          emptyDir: {}            # ephemeral — fine for a demo
+        - name: init
+          configMap:
+            name: clickhouse-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: observability
+  labels:
+    app: clickhouse
+spec:
+  selector:
+    app: clickhouse
+  ports:
+    - name: native
+      port: 9000
+      targetPort: native
+    - name: http
+      port: 8123
+      targetPort: http

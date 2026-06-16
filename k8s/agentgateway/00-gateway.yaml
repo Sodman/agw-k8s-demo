@@ -1,0 +1,22 @@
+# The Gateway is the front door. It is a *standard* Kubernetes Gateway API resource
+# (gateway.networking.k8s.io) — the only agentgateway-specific part is the
+# gatewayClassName, which tells the agentgateway control plane to spin up and manage
+# an agentgateway proxy for it.
+#
+# Installing the agentgateway Helm chart registers a GatewayClass named "agentgateway";
+# creating this Gateway makes the control plane deploy a proxy Deployment + Service
+# both named "agentgateway-proxy" in this namespace.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agentgateway-proxy
+  namespace: agentgateway-system
+spec:
+  gatewayClassName: agentgateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All

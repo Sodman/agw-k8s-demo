@@ -1,0 +1,39 @@
+# An AgentgatewayBackend describes an upstream LLM provider. This is the Gateway-API
+# equivalent of one entry in the standalone config's `llm.models` list.
+#
+# The API key is NOT stored here — `policies.auth.secretRef` points at a Kubernetes
+# Secret whose `Authorization` key holds the provider token. Those Secrets are created
+# from your environment variables by scripts/create-secrets.sh (they are never committed).
+#
+# We deliberately do NOT pin a `model:` on the backend, so the model the client asks
+# for in the request body (e.g. gpt-4o, gpt-4o-mini) is passed straight through. That
+# lets one backend serve every model from that provider; the HTTPRoute (20-routes.yaml)
+# decides *which* provider a given model name goes to.
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: openai
+  namespace: agentgateway-system
+spec:
+  ai:
+    provider:
+      openai: {}
+  policies:
+    auth:
+      secretRef:
+        name: openai-secret
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: anthropic
+  namespace: agentgateway-system
+spec:
+  ai:
+    provider:
+      anthropic: {}
+  policies:
+    auth:
+      secretRef:
+        name: anthropic-secret

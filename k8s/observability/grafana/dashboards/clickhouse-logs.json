@@ -1,0 +1,50 @@
+{
+  "uid": "agentgw-clickhouse",
+  "title": "Agentgateway — Access logs (ClickHouse)",
+  "schemaVersion": 39,
+  "version": 2,
+  "editable": true,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Requests by team & user (cost attribution)",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "options": { "showHeader": true },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "queryType": "table",
+          "rawSql": "SELECT LogAttributes['org'] AS org, LogAttributes['user_email'] AS user_email, count() AS requests FROM otel.otel_logs GROUP BY org, user_email ORDER BY requests DESC",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Recent requests",
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 9 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "options": { "showHeader": true },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "queryType": "table",
+          "rawSql": "SELECT Timestamp, LogAttributes['org'] AS org, LogAttributes['user_email'] AS user_email, LogAttributes['gen_ai.request.model'] AS model, Body FROM otel.otel_logs ORDER BY Timestamp DESC LIMIT 100",
+          "format": 1
+        }
+      ]
+    }
+  ],
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "__comment": "Attributes set by the access-logs-otlp AgentgatewayPolicy land in the LogAttributes Map(String,String) column. user_email + org are custom; gen_ai.request.model is emitted by agentgateway. Queries verified against the otel.otel_logs table the ClickHouse exporter auto-creates."
+}

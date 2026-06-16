@@ -1,0 +1,110 @@
+---
+# OpenTelemetry Collector (contrib) — receives OTLP/gRPC access logs from agentgateway
+# and writes them to ClickHouse via the clickhouseexporter.
+# Metrics do NOT pass through here: Prometheus scrapes the gateway's /metrics directly.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+
+    exporters:
+      # ClickHouse exporter writes LOGS into the `otel` database.
+      # DSN form: tcp://<host>:<native-port>?<params>. Credentials can also live in
+      # `username`/`password` keys; here the default user has no password so we omit them.
+      clickhouse:
+        endpoint: tcp://clickhouse:9000?dial_timeout=10s
+        database: otel
+        username: default
+        password: ""
+        async_insert: true
+        ttl: 72h               # rows expire after 72h (demo hygiene)
+        compress: lz4
+        create_schema: true    # auto-create otel_logs table on first write — no manual DDL
+        logs_table_name: otel_logs
+        timeout: 5s
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
+      # Handy while demoing: prints received logs to the collector's stdout.
+      debug:
+        verbosity: normal
+
+    service:
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [clickhouse, debug]
+      telemetry:
+        logs:
+          level: info
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels:
+    app: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+        - name: otel-collector
+          # contrib image is required for the clickhouseexporter.
+          image: otel/opentelemetry-collector-contrib:0.141.0
+          args: ["--config=/etc/otel/config.yaml"]
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels:
+    app: otel-collector
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc

@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# Basic security: API-key authentication.
+#
+# This is the Gateway-API equivalent of the standalone config's
+# `llm.policies.apiKey`. Clients must present a key in the `X-API-Key` header.
+#
+# Each entry in the Secret maps a client id -> either a bare key string, or a
+# JSON object { "key": ..., "metadata": {...} }. The metadata is attached to the
+# request and can be read in CEL later (e.g. apiKey.user, apiKey.org) for
+# authorization, metrics labels, and access logs.
+#
+# NOTE: the value below is a DEMO key, not a real credential. It is safe to keep
+# in git. Rotate/replace it for anything real.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agentgateway-apikeys
+  namespace: agentgateway-system
+type: Opaque
+stringData:
+  # client id: demo-engineering
+  demo-engineering: |
+    {
+      "key": "demo-key-engineering",
+      "metadata": { "user": "demo-user", "org": "engineering" }
+    }
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: apikey-auth
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway-proxy
+  traffic:
+    apiKeyAuthentication:
+      mode: Strict            # require a valid key on every request
+      location:
+        header:
+          name: X-API-Key     # read the key from this header (matches production)
+      secretRef:
+        name: agentgateway-apikeys

@@ -1,0 +1,111 @@
+# ===========================================================================
+# ADVANCED step — authenticate real users with their Google (@solo.io) identity,
+# and authorize by verified email. This mirrors the standalone config's
+# `llm.policies.jwtAuth` + `authorization`.
+#
+# Mint a token for testing with:   gcloud auth print-identity-token
+# (that token's `aud` is Google's gcloud client id, set in `audiences` below.)
+#
+# Applying this file evolves the Level-1 (static API key) setup into Level-2:
+#   * API keys still work, but become OPTIONAL...
+#   * ...because the authorization rule now accepts EITHER a verified @solo.io
+#     JWT OR a valid API key. Anything else is rejected.
+# ===========================================================================
+
+# --- A static backend the gateway uses to fetch Google's JWKS (signing keys) ---
+# Remote JWKS must be reached via a backendRef (there is no "paste a URL" field).
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: google-oauth
+  namespace: agentgateway-system
+spec:
+  static:
+    host: www.googleapis.com
+    port: 443
+---
+# Initiate TLS when talking to www.googleapis.com (system CAs, SNI auto-set).
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: google-oauth-tls
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: google-oauth
+  backend:
+    tls: {}
+---
+# --- Validate Google ID tokens (optional: requests without a token are allowed
+#     here and fall through to the authorization rule below). ---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: jwt-google
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway-proxy
+  traffic:
+    jwtAuthentication:
+      mode: Optional
+      providers:
+        - issuer: https://accounts.google.com
+          audiences:
+            # Google's gcloud CLI client id — the `aud` of tokens from
+            # `gcloud auth print-identity-token`. Replace with your own OAuth
+            # client id if you mint tokens a different way.
+            - "32555940559.apps.googleusercontent.com"
+          jwks:
+            remote:
+              backendRef:
+                group: agentgateway.dev
+                kind: AgentgatewayBackend
+                name: google-oauth
+                port: 443
+              jwksPath: /oauth2/v3/certs
+              cacheDuration: 5m
+---
+# --- Relax API-key auth to OPTIONAL so JWT users without a key aren't blocked
+#     at the authentication stage. (Overwrites the Strict policy from 30-auth.yaml.) ---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: apikey-auth
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway-proxy
+  traffic:
+    apiKeyAuthentication:
+      mode: Optional
+      location:
+        header:
+          name: X-API-Key
+      secretRef:
+        name: agentgateway-apikeys
+---
+# --- The actual access rule: allow a request only if it carries EITHER a
+#     verified @solo.io Google identity OR a valid API key. ---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: llm-authorization
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway-proxy
+  traffic:
+    authorization:
+      action: Allow
+      policy:
+        matchExpressions:
+          - '(has(jwt.email) && jwt.email.endsWith("@solo.io") && jwt.email_verified) || has(apiKey.user)'

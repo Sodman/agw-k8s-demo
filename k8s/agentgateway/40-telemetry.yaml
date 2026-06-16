@@ -1,0 +1,82 @@
+# ---------------------------------------------------------------------------
+# Observability — the Gateway-API equivalent of the standalone config's
+# `config.metrics.fields` (Prometheus label enrichment) and
+# `frontendPolicies.accessLog.otlp` (per-request access logs shipped to an OTel
+# collector). Both add the same business dimensions: who made the request
+# (user_email) and which team to bill it to (org).
+#
+#   Level 1 (metrics):  Prometheus scrapes the gateway -> Grafana dashboard,
+#                       broken down by the low-cardinality `org` label.
+#   Level 2 (logs):     one OTLP LogRecord per request -> OTel Collector ->
+#                       ClickHouse -> Grafana, with per-user detail.
+# ---------------------------------------------------------------------------
+
+# Prometheus metric labels. Keep these LOW cardinality — a label is added to
+# every metric series, so per-user values would explode storage. We add team only.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: metrics-labels
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway-proxy
+  frontend:
+    metrics:
+      attributes:
+        add:
+          - name: org
+            # The team/department, taken from the request header. Missing/!valid -> "unknown".
+            expression: 'request.headers["x-org"]'
+---
+# Access logs shipped to the OTel Collector over OTLP/gRPC. High-cardinality
+# fields (like user_email) are fine here — logs are row storage, not metric series.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: access-logs-otlp
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway-proxy
+  frontend:
+    accessLog:
+      otlp:
+        protocol: GRPC
+        backendRef:
+          # The collector lives in the `observability` namespace; the
+          # ReferenceGrant below authorizes this cross-namespace reference.
+          kind: Service
+          name: otel-collector
+          namespace: observability
+          port: 4317
+      attributes:
+        add:
+          - name: org
+            expression: 'request.headers["x-org"]'
+          - name: user_email
+            # Prefer the verified JWT email (Advanced step); fall back to the API
+            # key's owner metadata; else "anonymous".
+            expression: 'has(jwt.email) ? jwt.email : (has(apiKey.user) ? apiKey.user : "anonymous")'
+---
+# Gateway API requires an explicit ReferenceGrant to reference a resource in
+# another namespace. This lets AgentgatewayPolicies in agentgateway-system send
+# access logs to the otel-collector Service in observability.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-agentgateway-to-otel-collector
+  namespace: observability
+spec:
+  from:
+    - group: agentgateway.dev
+      kind: AgentgatewayPolicy
+      namespace: agentgateway-system
+  to:
+    - group: ""
+      kind: Service
+      name: otel-collector
