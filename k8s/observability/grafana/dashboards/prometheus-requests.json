@@ -90,5 +90,5 @@
   ],
   "templating": { "list": [] },
   "annotations": { "list": [] },
-  "__comment": "Metric names verified against agentgateway v1.2.1 /metrics. The org label is added by the metrics-labels AgentgatewayPolicy. Stat panels show cumulative totals (non-zero even when idle); timeseries show live rates during traffic."
+  "__comment": "Metric names verified against agentgateway v1.2.1 /metrics. The org label is added by the telemetry AgentgatewayPolicy. Stat panels show cumulative totals (non-zero even when idle); timeseries show live rates during traffic."
 }

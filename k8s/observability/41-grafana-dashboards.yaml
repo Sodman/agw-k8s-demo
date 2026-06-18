@@ -49,7 +49,7 @@ data:
       ],
       "templating": { "list": [] },
       "annotations": { "list": [] },
-      "__comment": "Attributes set by the access-logs-otlp AgentgatewayPolicy land in the LogAttributes Map(String,String) column. user_email + org are custom; gen_ai.request.model is emitted by agentgateway. Queries verified against the otel.otel_logs table the ClickHouse exporter auto-creates."
+      "__comment": "Attributes set by the telemetry AgentgatewayPolicy land in the LogAttributes Map(String,String) column. user_email + org are custom; gen_ai.request.model is emitted by agentgateway. Queries verified against the otel.otel_logs table the ClickHouse exporter auto-creates."
     }
   prometheus-requests.json: |
     {
@@ -144,7 +144,7 @@ data:
       ],
       "templating": { "list": [] },
       "annotations": { "list": [] },
-      "__comment": "Metric names verified against agentgateway v1.2.1 /metrics. The org label is added by the metrics-labels AgentgatewayPolicy. Stat panels show cumulative totals (non-zero even when idle); timeseries show live rates during traffic."
+      "__comment": "Metric names verified against agentgateway v1.2.1 /metrics. The org label is added by the telemetry AgentgatewayPolicy. Stat panels show cumulative totals (non-zero even when idle); timeseries show live rates during traffic."
     }
 kind: ConfigMap
 metadata:

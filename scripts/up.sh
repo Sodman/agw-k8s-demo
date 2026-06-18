@@ -55,6 +55,9 @@ kubectl apply -f k8s/observability/
 
 # --- 6. Gateway, backends, routes, policies --------------------------------
 say "Applying the Gateway, provider backends, routes, and policies"
+# Drop superseded policy names from older repo versions (no-op on fresh install).
+kubectl delete agentgatewaypolicy metrics-labels access-logs-otlp \
+  -n agentgateway-system --ignore-not-found
 kubectl apply -f k8s/agentgateway/00-gateway.yaml
 kubectl apply -f k8s/agentgateway/10-backends.yaml
 kubectl apply -f k8s/agentgateway/20-routes.yaml

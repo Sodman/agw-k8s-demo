@@ -29,7 +29,7 @@ flowchart LR
     subgraph cluster["kind cluster"]
       subgraph agw["namespace: agentgateway-system"]
         gw["Gateway<br/>(agentgateway proxy)"]
-        gw --> pol{{"AgentgatewayPolicy<br/>• API-key auth<br/>• copy body.model → x-model<br/>• authorization"}}
+        gw --> pol{{"AgentgatewayPolicy<br/>• extract-model (PreRouting)<br/>• apikey-auth<br/>• telemetry"}}
         pol --> rt["HTTPRoute<br/>match x-model"]
         rt -->|"gpt-*"| be1["Backend: openai"]
         rt -->|"claude-*"| be2["Backend: anthropic"]
@@ -56,6 +56,11 @@ The demo is layered so you can stop at whatever depth fits your audience:
 | **Observability L1** | Prometheus + Grafana: requests and tokens broken down **by team**. |
 | **Observability L2** | Access logs → OTel Collector → ClickHouse → Grafana: a row **per request, per user**. |
 | **Security (advanced)** | Log in with a real Google (`@solo.io`) identity; authorize by verified email. |
+
+The walkthrough applies **three** `AgentgatewayPolicy` resources on the base path
+(`extract-model`, `apikey-auth`, `telemetry`). The advanced step adds
+`google-oauth-tls` (backend TLS for JWKS) and `llm-access-control` (JWT + relaxed
+API key + authorization), and removes `apikey-auth`.
 
 ---
 
@@ -207,7 +212,7 @@ The Gateway API matches on HTTP attributes (path, headers), not on JSON bodies. 
 [`k8s/agentgateway/20-routes.yaml`](k8s/agentgateway/20-routes.yaml) does it in two
 moves:
 
-1. An **`AgentgatewayPolicy`** copies `model` out of the body into an `x-model`
+1. The **`extract-model`** policy copies `model` out of the body into an `x-model`
    header, in the `PreRouting` phase (before route matching):
 
    ```yaml
@@ -274,7 +279,7 @@ routed to Anthropic. An unknown model (`"model":"mistral-large"`) returns
 
 Right now anyone who can reach the proxy can use it. Let's require a key.
 [`k8s/agentgateway/30-auth.yaml`](k8s/agentgateway/30-auth.yaml) adds an
-`AgentgatewayPolicy` with `apiKeyAuthentication` (read from the `X-API-Key`
+`apikey-auth` policy with `apiKeyAuthentication` (read from the `X-API-Key`
 header) plus a Secret holding one demo key with attached metadata:
 
 ```yaml
@@ -324,31 +329,27 @@ kubectl apply -f k8s/observability/
 kubectl -n observability rollout status deploy/grafana --timeout=180s
 ```
 
-Two more policies in [`k8s/agentgateway/40-telemetry.yaml`](k8s/agentgateway/40-telemetry.yaml)
-tell the gateway to enrich its telemetry with business context, using CEL
-expressions:
+One **`telemetry`** policy in
+[`k8s/agentgateway/40-telemetry.yaml`](k8s/agentgateway/40-telemetry.yaml)
+enriches both Prometheus metrics and OTLP access logs with business context, using
+CEL expressions under a single `frontend:` block:
 
 ```yaml
-# Prometheus: add a low-cardinality team label to every metric
-frontend:
-  metrics:
-    attributes:
-      add:
-        - { name: org, expression: 'request.headers["x-org"]' }
-```
-
-```yaml
-# Access logs: ship one OTLP record per request to the collector, tagged with
-# the team and the caller's identity
-frontend:
-  accessLog:
-    otlp:
-      protocol: GRPC
-      backendRef: { kind: Service, name: otel-collector, namespace: observability, port: 4317 }
-    attributes:
-      add:
-        - { name: org,   expression: 'request.headers["x-org"]' }
-        - { name: user_email, expression: 'has(jwt.email) ? jwt.email : (has(apiKey.user) ? apiKey.user : "anonymous")' }
+metadata: { name: telemetry }
+spec:
+  frontend:
+    metrics:
+      attributes:
+        add:
+          - { name: org, expression: 'request.headers["x-org"]' }
+    accessLog:
+      otlp:
+        protocol: GRPC
+        backendRef: { kind: Service, name: otel-collector, namespace: observability, port: 4317 }
+      attributes:
+        add:
+          - { name: org,   expression: 'request.headers["x-org"]' }
+          - { name: user_email, expression: 'has(jwt.email) ? jwt.email : (has(apiKey.user) ? apiKey.user : "anonymous")' }
 ```
 
 The collector lives in another namespace, so a `ReferenceGrant` (also in that
@@ -380,7 +381,7 @@ sum by (org) (agentgateway_gen_ai_client_token_usage_sum)
 sum by (org) (rate(agentgateway_requests_total[1m]))
 ```
 
-The `org` label is the one we added with the metrics policy. Metric labels
+The `org` label is the one the `telemetry` policy adds to metrics. Metric labels
 must stay low-cardinality (a label value per user would explode storage), which is
 exactly why per-user detail goes to logs instead — Level 2.
 
@@ -399,7 +400,7 @@ ORDER BY requests DESC
 ```
 
 This is the per-user, per-team cost-attribution view. The custom attributes
-(`org`, `user_email`) are the ones the access-log policy attached; the model
+(`org`, `user_email`) are the ones the `telemetry` policy attaches to access logs; the model
 and timing come built in. The OTel Collector's ClickHouse exporter creates the
 `otel.otel_logs` table for you on first write.
 
@@ -407,25 +408,37 @@ and timing come built in. The OTel Collector's ClickHouse exporter creates the
 
 A shared static key is fine for a service account, but for *people* you usually
 want real identity. [`k8s/agentgateway/advanced/jwt-google.yaml`](k8s/agentgateway/advanced/jwt-google.yaml)
-adds Google JWT validation and an authorization rule, and relaxes the API key to
-optional so either credential works:
+adds a static backend for Google's JWKS, a backend-TLS policy for it, and one
+merged Gateway policy — **`llm-access-control`** — that bundles JWT validation,
+relaxed API-key auth, and the CEL authorization rule:
 
 - **`jwtAuthentication`** (mode `Optional`) validates Google ID tokens. Google's
-  signing keys (JWKS) are fetched through a small static backend + a backend-TLS
-  policy (remote JWKS must be reached via a `backendRef`, not a bare URL).
-- **`authorization`** then requires, in CEL, *either* a verified `@solo.io` email
-  *or* a valid API key:
+  signing keys (JWKS) are fetched through the `google-oauth` backend (remote JWKS
+  must be reached via a `backendRef`, not a bare URL).
+- **`apiKeyAuthentication`** (mode `Optional`) still accepts `X-API-Key`, but no
+  longer rejects requests that arrive without one.
+- **`authorization`** requires, in CEL, *either* a verified `@solo.io` email *or*
+  a valid API key:
 
   ```yaml
-  traffic:
-    authorization:
-      action: Allow
-      policy:
-        matchExpressions:
-          - '(has(jwt.email) && jwt.email.endsWith("@solo.io") && jwt.email_verified) || has(apiKey.user)'
+  metadata: { name: llm-access-control }
+  spec:
+    traffic:
+      jwtAuthentication: { mode: Optional, providers: [...] }
+      apiKeyAuthentication: { mode: Optional, location: { header: { name: X-API-Key } }, ... }
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions:
+            - '(has(jwt.email) && jwt.email.endsWith("@solo.io") && jwt.email_verified) || has(apiKey.user)'
   ```
 
+Remove the step-7 `apikey-auth` policy first — `llm-access-control` replaces it.
+(The `jwt-google` / `llm-authorization` names are only deleted if you applied an
+older version of this repo.)
+
 ```bash
+kubectl delete agentgatewaypolicy apikey-auth jwt-google llm-authorization -n agentgateway-system --ignore-not-found
 kubectl apply -f k8s/agentgateway/advanced/jwt-google.yaml
 ```
 
@@ -476,11 +489,11 @@ Here's the translation:
 | `llm.models[]` entry (match by model name → provider) | `HTTPRoute` rule matching `x-model` → `AgentgatewayBackend` |
 | The provider + its `apiKey` | `AgentgatewayBackend` + a Secret via `policies.auth.secretRef` |
 | OpenAI-compatible w/ `hostOverride` (Fireworks) | `provider.openai` + `host`/`port` on the backend |
-| `llm.policies.apiKey` | `AgentgatewayPolicy` → `traffic.apiKeyAuthentication` |
-| `llm.policies.jwtAuth` (Google) | `AgentgatewayPolicy` → `traffic.jwtAuthentication` |
-| `llm.policies.authorization` (CEL rules) | `AgentgatewayPolicy` → `traffic.authorization.policy.matchExpressions` |
-| `config.metrics.fields.add` | `AgentgatewayPolicy` → `frontend.metrics.attributes.add` |
-| `frontendPolicies.accessLog.otlp` | `AgentgatewayPolicy` → `frontend.accessLog.otlp` |
+| `llm.policies.apiKey` | `apikey-auth` → `traffic.apiKeyAuthentication` (advanced: folded into `llm-access-control`) |
+| `llm.policies.jwtAuth` (Google) | `llm-access-control` → `traffic.jwtAuthentication` |
+| `llm.policies.authorization` (CEL rules) | `llm-access-control` → `traffic.authorization.policy.matchExpressions` |
+| `config.metrics.fields.add` | `telemetry` → `frontend.metrics.attributes.add` |
+| `frontendPolicies.accessLog.otlp` | `telemetry` → `frontend.accessLog.otlp` |
 | Routing by `x-org` to per-org GCP projects | omitted (the prod-only Vertex bit); here `x-org` is used purely to attribute usage |
 
 The main simplification: production routes Claude through Google Vertex with a
@@ -505,6 +518,7 @@ usage-tracking dimension.
 | `AgentgatewayBackend` `ACCEPTED: False`, "secret not found" | Run `source .env && ./scripts/create-secrets.sh`. |
 | Requests return `route not found` (404) | The `model` doesn't match any route regex (`^gpt-`, `^claude-`). Check the `model` in your body. |
 | `401` on every call | API-key auth is on; add `-H 'X-API-Key: demo-key-engineering'`. |
+| Leftover policies after a repo update | Re-run `./scripts/up.sh`, or delete orphans: `metrics-labels`, `access-logs-otlp`, `jwt-google`, `llm-authorization`. |
 | Provider returns its own auth error | The provider key is missing/invalid. Recreate the Secret with a real key. |
 | Grafana ClickHouse panels empty | Send traffic, then check the collector: `kubectl logs -n observability deploy/otel-collector`. Plugin install needs internet on first Grafana boot. |
 | Prometheus target down | Confirm the proxy pod is running; metrics are on pod port `15020`. |
@@ -533,9 +547,9 @@ k8s/agentgateway/
   00-gateway.yaml                  # the Gateway (front door)
   10-backends.yaml                 # AgentgatewayBackend: openai, anthropic
   20-routes.yaml                   # model->header transform + HTTPRoute
-  30-auth.yaml                     # API-key authentication
-  40-telemetry.yaml                # metrics labels + OTLP access logs + ReferenceGrant
-  advanced/jwt-google.yaml         # Google login + email authorization
+  30-auth.yaml                     # apikey-auth (Strict API-key authentication)
+  40-telemetry.yaml                # telemetry (metrics labels + OTLP access logs + ReferenceGrant)
+  advanced/jwt-google.yaml         # google-oauth backend + llm-access-control (JWT + authz)
   extras/fireworks.yaml            # optional OpenAI-compatible provider
 k8s/observability/                 # ClickHouse, OTel Collector, Prometheus, Grafana
 ```

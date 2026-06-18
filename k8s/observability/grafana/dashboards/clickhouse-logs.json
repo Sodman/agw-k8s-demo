@@ -46,5 +46,5 @@
   ],
   "templating": { "list": [] },
   "annotations": { "list": [] },
-  "__comment": "Attributes set by the access-logs-otlp AgentgatewayPolicy land in the LogAttributes Map(String,String) column. user_email + org are custom; gen_ai.request.model is emitted by agentgateway. Queries verified against the otel.otel_logs table the ClickHouse exporter auto-creates."
+  "__comment": "Attributes set by the telemetry AgentgatewayPolicy land in the LogAttributes Map(String,String) column. user_email + org are custom; gen_ai.request.model is emitted by agentgateway. Queries verified against the otel.otel_logs table the ClickHouse exporter auto-creates."
 }

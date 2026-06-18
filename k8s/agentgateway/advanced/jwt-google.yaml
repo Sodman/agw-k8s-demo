@@ -10,6 +10,9 @@
 #   * API keys still work, but become OPTIONAL...
 #   * ...because the authorization rule now accepts EITHER a verified @solo.io
 #     JWT OR a valid API key. Anything else is rejected.
+#
+# Delete the step-7 `apikey-auth` policy first so only one apiKeyAuthentication
+# config is active on the Gateway (the merged policy below sets mode: Optional).
 # ===========================================================================
 
 # --- A static backend the gateway uses to fetch Google's JWKS (signing keys) ---
@@ -38,12 +41,12 @@ spec:
   backend:
     tls: {}
 ---
-# --- Validate Google ID tokens (optional: requests without a token are allowed
-#     here and fall through to the authorization rule below). ---
+# JWT validation (optional), relaxed API-key auth (optional), and the CEL
+# authorization rule — one Gateway policy, applied together.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
-  name: jwt-google
+  name: llm-access-control
   namespace: agentgateway-system
 spec:
   targetRefs:
@@ -69,20 +72,6 @@ spec:
                 port: 443
               jwksPath: /oauth2/v3/certs
               cacheDuration: 5m
----
-# --- Relax API-key auth to OPTIONAL so JWT users without a key aren't blocked
-#     at the authentication stage. (Overwrites the Strict policy from 30-auth.yaml.) ---
-apiVersion: agentgateway.dev/v1alpha1
-kind: AgentgatewayPolicy
-metadata:
-  name: apikey-auth
-  namespace: agentgateway-system
-spec:
-  targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: agentgateway-proxy
-  traffic:
     apiKeyAuthentication:
       mode: Optional
       location:
@@ -90,20 +79,6 @@ spec:
           name: X-API-Key
       secretRef:
         name: agentgateway-apikeys
----
-# --- The actual access rule: allow a request only if it carries EITHER a
-#     verified @solo.io Google identity OR a valid API key. ---
-apiVersion: agentgateway.dev/v1alpha1
-kind: AgentgatewayPolicy
-metadata:
-  name: llm-authorization
-  namespace: agentgateway-system
-spec:
-  targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: agentgateway-proxy
-  traffic:
     authorization:
       action: Allow
       policy:

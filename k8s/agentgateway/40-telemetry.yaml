@@ -10,13 +10,10 @@
 #   Level 2 (logs):     one OTLP LogRecord per request -> OTel Collector ->
 #                       ClickHouse -> Grafana, with per-user detail.
 # ---------------------------------------------------------------------------
-
-# Prometheus metric labels. Keep these LOW cardinality — a label is added to
-# every metric series, so per-user values would explode storage. We add team only.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
-  name: metrics-labels
+  name: telemetry
   namespace: agentgateway-system
 spec:
   targetRefs:
@@ -24,26 +21,16 @@ spec:
       kind: Gateway
       name: agentgateway-proxy
   frontend:
+    # Prometheus metric labels. Keep these LOW cardinality — a label is added to
+    # every metric series, so per-user values would explode storage. We add team only.
     metrics:
       attributes:
         add:
           - name: org
             # The team/department, taken from the request header. Missing/!valid -> "unknown".
             expression: 'request.headers["x-org"]'
----
-# Access logs shipped to the OTel Collector over OTLP/gRPC. High-cardinality
-# fields (like user_email) are fine here — logs are row storage, not metric series.
-apiVersion: agentgateway.dev/v1alpha1
-kind: AgentgatewayPolicy
-metadata:
-  name: access-logs-otlp
-  namespace: agentgateway-system
-spec:
-  targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: agentgateway-proxy
-  frontend:
+    # Access logs shipped to the OTel Collector over OTLP/gRPC. High-cardinality
+    # fields (like user_email) are fine here — logs are row storage, not metric series.
     accessLog:
       otlp:
         protocol: GRPC
