@@ -55,7 +55,7 @@ The demo is layered so you can stop at whatever depth fits your audience:
 | **Security (basic)** | A static API key is required (`X-API-Key`). |
 | **Observability L1** | Prometheus + Grafana: requests and tokens broken down **by team**. |
 | **Observability L2** | Access logs → OTel Collector → ClickHouse → Grafana: a row **per request, per user**. |
-| **Security (advanced)** | Log in with a real Google (`@solo.io`) identity; authorize by verified email. |
+| **Security (advanced)** | Log in with a real Google identity; authorize by verified email. |
 
 The walkthrough applies **three** `AgentgatewayPolicy` resources on the base path
 (`extract-model`, `apikey-auth`, `telemetry`). The advanced step adds

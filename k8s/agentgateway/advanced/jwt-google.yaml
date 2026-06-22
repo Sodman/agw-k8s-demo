@@ -83,4 +83,6 @@ spec:
       action: Allow
       policy:
         matchExpressions:
+          # Replace @solo.io with your own domain that you would like to allow users from
           - '(has(jwt.email) && jwt.email.endsWith("@solo.io") && jwt.email_verified) || has(apiKey.user)'
+
