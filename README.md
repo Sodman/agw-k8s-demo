@@ -447,7 +447,7 @@ Test the three outcomes:
 ```bash
 # Valid API key -> 200 (apiKey branch)
 curl -s -o /dev/null -w 'apikey  -> %{http_code}\n' -X POST http://localhost:8080/v1/chat/completions \
-  -H 'X-API-Key: demo-key-engineering' -H 'x-org: engineering' \
+  -H 'x-api-key: demo-key-engineering' -H 'x-org: engineering' \
   -H 'Content-Type: application/json' -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}],"max_tokens":5}'
 
 # Neither credential -> 403 (authorization denies)
@@ -477,31 +477,24 @@ export FIREWORKS_API_KEY=...; ./scripts/create-secrets.sh
 kubectl apply -f k8s/agentgateway/extras/fireworks.yaml
 ```
 
+You can test models from it (e.g. Kimi K2.6 hosted via Fireworks as `accounts/fireworks/models/kimi-k2p6`). If your port-forward is stale (common after applying extra yamls), re-run it first:
+
+```bash
+kubectl port-forward -n agentgateway-system deploy/agentgateway-proxy 8080:80
+```
+
+```bash
+curl -s http://localhost:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' -H 'X-API-Key: demo-key-engineering' \
+  -d '{"model":"accounts/fireworks/models/kimi-k2p6","messages":[{"role":"user","content":"hi"}],"max_tokens":20}'
+```
+
+(Real responses require a valid `FIREWORKS_API_KEY` with access to the model; otherwise you will see the provider's error.)
+```
+
+Also fix the yaml comments to be accurate.
 ---
 
-## How this maps to the standalone config
-
-The production version uses agentgateway's standalone YAML (one `config.yaml`).
-Here's the translation:
-
-| Standalone config | Gateway API resource here |
-|---|---|
-| `llm.models[]` entry (match by model name → provider) | `HTTPRoute` rule matching `x-model` → `AgentgatewayBackend` |
-| The provider + its `apiKey` | `AgentgatewayBackend` + a Secret via `policies.auth.secretRef` |
-| OpenAI-compatible w/ `hostOverride` (Fireworks) | `provider.openai` + `host`/`port` on the backend |
-| `llm.policies.apiKey` | `apikey-auth` → `traffic.apiKeyAuthentication` (advanced: folded into `llm-access-control`) |
-| `llm.policies.jwtAuth` (Google) | `llm-access-control` → `traffic.jwtAuthentication` |
-| `llm.policies.authorization` (CEL rules) | `llm-access-control` → `traffic.authorization.policy.matchExpressions` |
-| `config.metrics.fields.add` | `telemetry` → `frontend.metrics.attributes.add` |
-| `frontendPolicies.accessLog.otlp` | `telemetry` → `frontend.accessLog.otlp` |
-| Routing by `x-org` to per-org GCP projects | omitted (the prod-only Vertex bit); here `x-org` is used purely to attribute usage |
-
-The main simplification: production routes Claude through Google Vertex with a
-different GCP project per department. That needs cloud credentials, so this demo
-goes direct to Anthropic/OpenAI instead and keeps `x-org` only as a
-usage-tracking dimension.
-
----
 
 ## Cleanup
 
@@ -554,5 +547,3 @@ k8s/agentgateway/
 k8s/observability/                 # ClickHouse, OTel Collector, Prometheus, Grafana
 ```
 
-Every manifest in this repo was applied to a real kind cluster and exercised with
-live OpenAI calls before being committed.

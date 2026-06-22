@@ -1,12 +1,11 @@
 # ===========================================================================
 # OPTIONAL extra provider — Fireworks AI, an OpenAI-COMPATIBLE provider.
 # Mirrors the standalone config's `accounts/fireworks/*` model entry: it reuses
-# the `openai` provider type but overrides the upstream host/port, and routes
-# model names beginning with `accounts/fireworks/` to it.
+# the `openai` provider type but overrides the upstream host/port/path, and
+# routes model names beginning with `accounts/fireworks/` to it.
 #
 # Needs a Fireworks key:
-#   kubectl create secret generic fireworks-secret -n agentgateway-system \
-#     --from-literal=Authorization="$FIREWORKS_API_KEY"
+#   export FIREWORKS_API_KEY=...; ./scripts/create-secrets.sh
 # ===========================================================================
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayBackend
@@ -16,15 +15,18 @@ metadata:
 spec:
   ai:
     provider:
-      # OpenAI-compatible API, but pointed at Fireworks' host instead of OpenAI's.
-      # host/port are siblings of the provider key (not nested under `openai`).
+      # OpenAI-compatible API pointed at Fireworks.
+      # host/port/path are siblings of the provider key.
       openai: {}
       host: api.fireworks.ai
       port: 443
+      path: "/inference/v1/chat/completions"
   policies:
     auth:
       secretRef:
         name: fireworks-secret
+    tls:
+      sni: api.fireworks.ai
 ---
 # Additive route: model names like "accounts/fireworks/models/..." -> Fireworks.
 # (Attaches to the same Gateway as the main llm-routes HTTPRoute.)
@@ -49,3 +51,19 @@ spec:
         - group: agentgateway.dev
           kind: AgentgatewayBackend
           name: fireworks
+---
+# Enable TLS outbound for the Fireworks backend (port 443, https-only endpoint).
+# Without this, connections are attempted in plain text and you get errors like
+# "plain HTTP request was sent to HTTPS port" from the remote.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: fireworks-tls
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: fireworks
+  backend:
+    tls: {}
