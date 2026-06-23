@@ -1,9 +1,9 @@
-# One LLM gateway for your whole team, on Kubernetes
+# Quick agentgateway demo with k8s gateway API
 
-This repo builds a small but real **AI gateway**: a single endpoint that your apps
+This repo shows you how to deploy an **AI gateway**: a single endpoint that your apps
 and developers point at instead of OpenAI, Anthropic, and friends directly. The
 gateway authenticates callers, routes each request to the right model provider,
-and records who spent how many tokens — so you can see usage per team and per user.
+and records who spent how many tokens, so you can see usage per team and per user.
 
 It uses [**agentgateway**](https://agentgateway.dev) (an open-source, AI-native
 proxy) driven entirely through the **Kubernetes Gateway API**. If you have seen the
@@ -12,11 +12,6 @@ same model applied to LLM traffic, with a couple of small CRDs on top.
 
 Everything here runs locally in a [kind](https://kind.sigs.k8s.io/) cluster. The
 only thing you bring is an API key or two.
-
-> This is the Gateway-API port of a real internal "front all our LLM usage through
-> one proxy" config that runs in production. That original used agentgateway's
-> standalone file-based config; here we express the same ideas as Kubernetes
-> resources. See [How this maps to the standalone config](#how-this-maps-to-the-standalone-config).
 
 ---
 
@@ -78,8 +73,8 @@ versions are fine):
 
 And at least one LLM API key:
 
-- **OpenAI** key (for `gpt-*`) — https://platform.openai.com/api-keys
-- **Anthropic** key (for `claude-*`, optional) — https://console.anthropic.com/
+- **OpenAI** key (for `gpt-*`): https://platform.openai.com/api-keys
+- **Anthropic** key (for `claude-*`): https://console.anthropic.com/
 
 ```bash
 cp .env.example .env
@@ -92,7 +87,10 @@ never written into any committed file.
 
 ---
 
-## TL;DR — just run it
+## TL;DR: just run it
+
+If you want to jump straight into a working setup without running through this
+guide step-by-step, you can just run:
 
 ```bash
 source .env
@@ -103,8 +101,7 @@ Then jump to [Send a request](#6-send-a-real-request) and
 [the dashboards](#9-level-1--metrics-by-team). To remove everything:
 `./scripts/down.sh`.
 
-The rest of this README is the **guided walkthrough** — the version to follow live
-on stage, where each step introduces one concept.
+The rest of this README is the same steps, but broken down as a guided walkthrough, where each step introduces one concept at a time.
 
 ---
 
@@ -132,18 +129,18 @@ kubectl apply --server-side --force-conflicts \
 
 # 2b. agentgateway control plane (Helm)
 helm upgrade -i agentgateway-crds oci://cr.agentgateway.dev/charts/agentgateway-crds \
-  --create-namespace --namespace agentgateway-system --version v1.2.1 \
+  --create-namespace --namespace agentgateway-system --version v1.3.0 \
   --set controller.image.pullPolicy=Always
 
 helm upgrade -i agentgateway oci://cr.agentgateway.dev/charts/agentgateway \
-  --namespace agentgateway-system --version v1.2.1 \
+  --namespace agentgateway-system --version v1.3.0 \
   --set controller.image.pullPolicy=Always \
   --set controller.extraEnv.KGW_ENABLE_GATEWAY_API_EXPERIMENTAL_FEATURES=true \
   --wait
 ```
 
 This registers a **GatewayClass** named `agentgateway`. A GatewayClass is "which
-implementation should handle my Gateways" — like a StorageClass, but for proxies.
+implementation should handle my Gateways", like a StorageClass but for proxies.
 
 ```bash
 kubectl get gatewayclass
@@ -162,7 +159,7 @@ kubectl apply -f k8s/agentgateway/00-gateway.yaml
 kubectl get gateway -n agentgateway-system
 ```
 
-Creating the Gateway makes the control plane deploy an actual proxy for you — a
+Creating the Gateway makes the control plane deploy an actual proxy for you: a
 Deployment and Service both named `agentgateway-proxy`.
 
 ### 4. Provider backends
@@ -186,7 +183,7 @@ spec:
 ```
 
 The provider key is read from a Kubernetes Secret (key `Authorization`), created
-from your environment variables — not from the manifest:
+from your environment variables, not from the manifest:
 
 ```bash
 source .env
@@ -204,7 +201,7 @@ kubectl get agentgatewaybackend -n agentgateway-system
 
 ### 5. Model-name routing
 
-Here is the central idea. Callers always hit the same path
+Callers always hit the same path
 (`/v1/chat/completions`) and just change the `model` field in the JSON body. We
 want `gpt-*` to go to OpenAI and `claude-*` to go to Anthropic.
 
@@ -261,7 +258,7 @@ curl -s http://localhost:8080/v1/chat/completions \
 { "choices":[{"message":{"role":"assistant","content":"gateway works"}}], "usage":{"total_tokens":15}, ... }
 ```
 
-Now ask for a Claude model — **same endpoint, same request shape**, just a
+Now ask for a Claude model. Same endpoint, same request shape, just a
 different `model`:
 
 ```bash
@@ -271,7 +268,7 @@ curl -s http://localhost:8080/v1/chat/completions \
 ```
 
 If you set an Anthropic key you'll get a Claude reply. If not, you'll get
-Anthropic's own auth error — which still proves the request was translated and
+Anthropic's own auth error, which still proves the request was translated and
 routed to Anthropic. An unknown model (`"model":"mistral-large"`) returns
 `route not found`, because nothing routes it.
 
@@ -318,10 +315,10 @@ attribute usage.
 [`k8s/observability/`](k8s/observability/) deploys four small single-pod
 workloads:
 
-- **Prometheus** — scrapes the proxy's `/metrics` (port 15020).
-- **OpenTelemetry Collector** — receives access logs over OTLP/gRPC.
-- **ClickHouse** — stores those logs (one row per request).
-- **Grafana** — dashboards over both, with Prometheus and ClickHouse datasources
+- **Prometheus** scrapes the proxy's `/metrics` (port 15020).
+- **OpenTelemetry Collector** receives access logs over OTLP/gRPC.
+- **ClickHouse** stores those logs (one row per request).
+- **Grafana** dashboards over both, with Prometheus and ClickHouse datasources
   pre-wired.
 
 ```bash
@@ -353,7 +350,7 @@ spec:
 ```
 
 The collector lives in another namespace, so a `ReferenceGrant` (also in that
-file) authorizes the cross-namespace reference — a normal Gateway API safeguard.
+file) authorizes the cross-namespace reference. That's a standard Gateway API safeguard.
 
 ```bash
 kubectl apply -f k8s/agentgateway/40-telemetry.yaml
@@ -365,7 +362,7 @@ Generate some traffic across a few teams to fill the dashboards:
 ./scripts/generate-traffic.sh 30      # 30 requests; omit the number to loop
 ```
 
-### 9. Level 1 — metrics by team
+### 9. Level 1: metrics by team
 
 ```bash
 kubectl port-forward -n observability svc/grafana 3000:3000
@@ -383,9 +380,9 @@ sum by (org) (rate(agentgateway_requests_total[1m]))
 
 The `org` label is the one the `telemetry` policy adds to metrics. Metric labels
 must stay low-cardinality (a label value per user would explode storage), which is
-exactly why per-user detail goes to logs instead — Level 2.
+exactly why per-user detail goes to logs instead (Level 2).
 
-### 10. Level 2 — access logs by user (ClickHouse)
+### 10. Level 2: access logs by user (ClickHouse)
 
 Open the **Agentgateway — Access logs (ClickHouse)** dashboard. Every request is a
 row, queried straight from ClickHouse:
@@ -409,7 +406,7 @@ and timing come built in. The OTel Collector's ClickHouse exporter creates the
 A shared static key is fine for a service account, but for *people* you usually
 want real identity. [`k8s/agentgateway/advanced/jwt-google.yaml`](k8s/agentgateway/advanced/jwt-google.yaml)
 adds a static backend for Google's JWKS, a backend-TLS policy for it, and one
-merged Gateway policy — **`llm-access-control`** — that bundles JWT validation,
+merged Gateway policy (`llm-access-control`) that bundles JWT validation,
 relaxed API-key auth, and the CEL authorization rule:
 
 - **`jwtAuthentication`** (mode `Optional`) validates Google ID tokens. Google's
@@ -433,7 +430,7 @@ relaxed API-key auth, and the CEL authorization rule:
             - '(has(jwt.email) && jwt.email.endsWith("@solo.io") && jwt.email_verified) || has(apiKey.user)'
   ```
 
-Remove the step-7 `apikey-auth` policy first — `llm-access-control` replaces it.
+Remove the step-7 `apikey-auth` policy first. `llm-access-control` replaces it.
 (The `jwt-google` / `llm-authorization` names are only deleted if you applied an
 older version of this repo.)
 
@@ -466,7 +463,7 @@ the `aud` of tokens from `gcloud auth print-identity-token`. Use your own OAuth
 client id if you mint tokens another way. With a real token, the access-log
 `user_email` now shows the actual signed-in address instead of `demo-user`.
 
-### Optional — add a third provider (Fireworks)
+### Optional: add a third provider (Fireworks)
 
 [`k8s/agentgateway/extras/fireworks.yaml`](k8s/agentgateway/extras/fireworks.yaml)
 shows the OpenAI-compatible pattern: the same `openai` provider type with the
@@ -490,9 +487,7 @@ curl -s http://localhost:8080/v1/chat/completions \
 ```
 
 (Real responses require a valid `FIREWORKS_API_KEY` with access to the model; otherwise you will see the provider's error.)
-```
 
-Also fix the yaml comments to be accurate.
 ---
 
 
